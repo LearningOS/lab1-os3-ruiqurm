@@ -21,7 +21,7 @@ use crate::timer::{get_time, get_time_us};
 use lazy_static::*;
 pub use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-
+use alloc::vec::Vec;
 pub use context::TaskContext;
 
 /// The task manager, where all the tasks are managed.
@@ -43,7 +43,7 @@ pub struct TaskManager {
 /// The task manager inner in 'UPSafeCell'
 struct TaskManagerInner {
     /// task list
-    tasks: [TaskControlBlock; MAX_APP_NUM],
+    tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
     current_task: usize,
 }
@@ -52,17 +52,20 @@ lazy_static! {
     /// a `TaskManager` instance through lazy_static!
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
-        let mut tasks = [TaskControlBlock {
-            task_cx: TaskContext::zero_init(),
-            task_status: TaskStatus::UnInit,
-            start_time : 0,
-            syscall_stat : [0 ; MAX_SYSCALL_NUM]
-        }; MAX_APP_NUM];
+        let mut tasks:Vec<TaskControlBlock> = Vec::new();
+        for _ in 0..MAX_APP_NUM{
+            tasks.push(TaskControlBlock{
+                task_cx: TaskContext::zero_init(),
+                task_status: TaskStatus::UnInit,
+                start_time : 0,
+                syscall_stat : [0 ; MAX_SYSCALL_NUM]
+             });
+        }
         for (i, t) in tasks.iter_mut().enumerate().take(num_app) {
             t.task_cx = TaskContext::goto_restore(init_app_cx(i));
             t.task_status = TaskStatus::Ready;
         }
-        TaskManager {
+        let m = TaskManager {
             num_app,
             inner: unsafe {
                 UPSafeCell::new(TaskManagerInner {
@@ -70,7 +73,8 @@ lazy_static! {
                     current_task: 0,
                 })
             },
-        }
+        };
+        m
     };
 }
 
@@ -85,6 +89,7 @@ impl TaskManager {
         task0.task_status = TaskStatus::Running;
         task0.start_time = get_time_us() / 1000;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        drop(task0);
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -125,7 +130,7 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
-            if inner.tasks[next].task_status == TaskStatus::UnInit{
+            if inner.tasks[next].start_time == 0 {
                 inner.tasks[next].start_time = get_time_us() / 1000;
             }
             inner.tasks[next].task_status = TaskStatus::Running;
@@ -133,6 +138,7 @@ impl TaskManager {
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
+            drop(current);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
                 __switch(current_task_cx_ptr, next_task_cx_ptr);
@@ -151,7 +157,7 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[current].syscall_stat[syscall] += 1;
-            drop(inner);
+            // drop(inner);
         }
 
     }
@@ -159,8 +165,8 @@ impl TaskManager {
     fn current_task_info(&self) -> (usize,[u32;MAX_SYSCALL_NUM]){
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        let ret = (get_time_us() / 1000 - inner.tasks[current].start_time, inner.tasks[current].syscall_stat)
-        drop(inner);
+        let ret = (get_time_us() / 1000 - inner.tasks[current].start_time, inner.tasks[current].syscall_stat);
+        // drop(inner);
         ret
     }
 }

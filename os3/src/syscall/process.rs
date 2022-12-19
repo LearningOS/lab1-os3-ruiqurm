@@ -46,9 +46,11 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     let (current_time,table) = get_task_info();
     unsafe{
-        (*ti).status = TaskStatus::Running;
-        (*ti).syscall_times =  table
-        (*ti).time =  current_time;
+        (*ti) = TaskInfo{
+            status: TaskStatus::Running,
+            syscall_times: table,
+            time: current_time,
+        };
     }
     0
 }
